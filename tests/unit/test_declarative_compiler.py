@@ -147,12 +147,13 @@ def test_validate_generated_dataset_names_collide_with_user_names() -> None:
 
 def test_validation_registry_exposes_predicates_and_rejects_custom_without_one() -> None:
     registry = ValidationRegistry()
-    for key in ("not_null", "range", "regex", "unique"):
+    for key in ("not_null", "range", "regex"):
         assert callable(registry.get_predicate(key))
+    assert callable(registry.get_failing_rows("unique"))
 
     registry.register("custom", lambda _df, _rule: None)
     with pytest.raises(NotImplementedError, match="does not expose"):
-        registry.get_predicate("custom")
+        registry.get_failing_rows("custom")
 
 
 def test_custom_validator_without_predicate_is_rejected_by_compiler() -> None:

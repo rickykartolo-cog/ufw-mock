@@ -1,13 +1,14 @@
 from functools import reduce
 from typing import Callable
 
-from pyspark.sql import Column, DataFrame, Window
+from pyspark.sql import Column, DataFrame
 from pyspark.sql import functions as F
 
 from ufw_mock.models.transformation import Transformation
 
 ValidationFn = Callable[[DataFrame, Transformation], None]
 ValidationPredicate = Callable[[DataFrame, Transformation], Column]
+ValidationRowsFn = Callable[[DataFrame, Transformation], DataFrame]
 
 
 class ValidationError(Exception):
@@ -20,6 +21,7 @@ class ValidationRegistry:
     def __init__(self) -> None:
         self._registry: dict[str, ValidationFn] = {}
         self._predicates: dict[str, ValidationPredicate] = {}
+        self._failing_rows: dict[str, ValidationRowsFn] = {}
         self._register_builtins()
 
     def register(
@@ -27,9 +29,12 @@ class ValidationRegistry:
         key: str,
         fn: ValidationFn,
         predicate: ValidationPredicate | None = None,
+        failing_rows: ValidationRowsFn | None = None,
     ) -> None:
         if not callable(fn):
             raise ValueError(f"Validator '{key}' must be callable.")
+        if predicate is not None and failing_rows is not None:
+            raise ValueError(f"Validator '{key}' cannot register both predicate kinds.")
         self._registry[key] = fn
         if predicate is not None:
             if not callable(predicate):
@@ -37,6 +42,12 @@ class ValidationRegistry:
             self._predicates[key] = predicate
         else:
             self._predicates.pop(key, None)
+        if failing_rows is not None:
+            if not callable(failing_rows):
+                raise ValueError(f"Failing-rows function for validator '{key}' must be callable.")
+            self._failing_rows[key] = failing_rows
+        else:
+            self._failing_rows.pop(key, None)
 
     def get(self, key: str) -> ValidationFn:
         if key not in self._registry:
@@ -51,32 +62,30 @@ class ValidationRegistry:
         self.get(key)
         if key not in self._predicates:
             raise NotImplementedError(
-                f"Validator '{key}' does not expose a declarative failing-rows predicate."
+                f"Validator '{key}' does not expose a declarative row-level predicate."
             )
         return self._predicates[key]
 
+    def get_failing_rows(self, key: str) -> ValidationRowsFn:
+        self.get(key)
+        if key in self._failing_rows:
+            return self._failing_rows[key]
+        predicate = self.get_predicate(key)
+
+        def filter_rows(df: DataFrame, transformation: Transformation) -> DataFrame:
+            return (
+                df.withColumn("_dq_violation", predicate(df, transformation))
+                .filter(F.col("_dq_violation"))
+            )
+
+        return filter_rows
+
     def failing_rows(self, df: DataFrame, transformation: Transformation) -> DataFrame:
-        predicate = self.get_predicate(transformation.type)
-        if transformation.type == "unique":
-            cols = transformation.input_cols or []
-            duplicate_keys = (
-                df.groupBy(*cols)
-                .count()
-                .filter(F.col("count") > 1)
-                .select(*cols)
-            )
-            return df.join(duplicate_keys, cols, "inner").withColumn(
-                "_dq_violation",
-                F.lit(True),
-            )
-        return (
-            df.withColumn("_dq_violation", predicate(df, transformation))
-            .filter(F.col("_dq_violation"))
-        )
+        return self.get_failing_rows(transformation.type)(df, transformation)
 
     def _register_builtins(self) -> None:
         self.register("not_null", _not_null, _not_null_predicate)
-        self.register("unique", _unique, _unique_predicate)
+        self.register("unique", _unique, failing_rows=_unique_failing_rows)
         self.register("regex", _regex, _regex_predicate)
         self.register("range", _range, _range_predicate)
 
@@ -95,16 +104,9 @@ def _unique(df: DataFrame, transformation: Transformation) -> None:
     cols = transformation.input_cols or []
     if not cols:
         raise ValueError("'unique' validator requires input_cols.")
-    has_duplicates = (
-        df.withColumn("_dq_unique_count", _unique_predicate(df, transformation))
-        .filter(F.col("_dq_unique_count"))
-        .limit(1)
-        .count()
-        > 0
-    )
     total = df.count()
     distinct = df.select(*cols).distinct().count()
-    if has_duplicates and distinct != total:
+    if distinct != total:
         raise ValidationError(f"Columns {cols} are not unique ({total} rows, {distinct} distinct).")
 
 
@@ -144,19 +146,12 @@ def _not_null_predicate(df: DataFrame, transformation: Transformation) -> Column
     return reduce(lambda left, right: left | right, (df[col].isNull() for col in cols))
 
 
-def _unique_predicate(df: DataFrame, transformation: Transformation) -> Column:
-    cols = transformation.input_cols or []
-    if not cols:
-        raise ValueError("'unique' validator requires input_cols.")
-    return F.count(F.lit(1)).over(Window.partitionBy(*cols)) > 1
-
-
 def _regex_predicate(df: DataFrame, transformation: Transformation) -> Column:
     cols = transformation.input_cols or []
     pattern = transformation.params.get("pattern")
     if not cols or not pattern:
         raise ValueError("'regex' validator requires input_cols and params.pattern.")
-    return ~df[cols[0]].rlike(pattern)
+    return reduce(lambda left, right: left | right, (~df[col].rlike(pattern) for col in cols))
 
 
 def _range_predicate(df: DataFrame, transformation: Transformation) -> Column:
@@ -165,4 +160,23 @@ def _range_predicate(df: DataFrame, transformation: Transformation) -> Column:
     max_val = transformation.params.get("max")
     if not cols or min_val is None or max_val is None:
         raise ValueError("'range' validator requires input_cols, params.min, and params.max.")
-    return (df[cols[0]] < min_val) | (df[cols[0]] > max_val)
+    return reduce(
+        lambda left, right: left | right,
+        ((df[col] < min_val) | (df[col] > max_val) for col in cols),
+    )
+
+
+def _unique_failing_rows(df: DataFrame, transformation: Transformation) -> DataFrame:
+    cols = transformation.input_cols or []
+    if not cols:
+        raise ValueError("'unique' validator requires input_cols.")
+    duplicate_keys = (
+        df.groupBy(*cols)
+        .count()
+        .filter(F.col("count") > 1)
+        .select(*cols)
+    )
+    return df.join(duplicate_keys, cols, "inner").withColumn(
+        "_dq_violation",
+        F.lit(True),
+    )

@@ -164,7 +164,7 @@ class SdpPipelineCompiler:
             definitions.append(base_definition)
             if task.type == TaskType.VALIDATE and task.transformations:
                 for transformation in task.transformations:
-                    self.validation_registry.get_predicate(transformation.type)
+                    self.validation_registry.get_failing_rows(transformation.type)
                 failures_name = f"{base_definition.name}_dq_failures"
                 summary_name = f"{base_definition.name}_dq_summary"
                 definitions.extend(
@@ -296,9 +296,10 @@ class SdpPipelineCompiler:
         def builder(spark: SparkSession) -> DataFrame:
             base = spark.read.table(base_name)
             failures: list[DataFrame] = []
-            for transformation in transformations:
+            for rule_index, transformation in enumerate(transformations):
                 failures.append(
                     validation_registry.failing_rows(base, transformation)
+                    .withColumn("_dq_rule_id", F.lit(f"{rule_index}:{transformation.name}"))
                     .withColumn("_dq_rule_name", F.lit(transformation.name))
                     .withColumn("_dq_columns", F.lit(",".join(transformation.input_cols or [])))
                 )
@@ -317,27 +318,26 @@ class SdpPipelineCompiler:
         def builder(spark: SparkSession) -> DataFrame:
             failures = (
                 spark.read.table(failures_name)
-                .groupBy("_dq_rule_name", "_dq_columns")
+                .groupBy("_dq_rule_id", "_dq_rule_name", "_dq_columns")
                 .count()
             )
-            metadata = spark.range(len(transformations))
-            rule_expr = F.lit(transformations[0].name)
-            columns_expr = F.lit(",".join(transformations[0].input_cols or []))
-            for index, transformation in enumerate(transformations[1:], 1):
-                rule_expr = F.when(
-                    F.col("id") == index,
-                    F.lit(transformation.name),
-                ).otherwise(rule_expr)
-                columns_expr = F.when(
-                    F.col("id") == index,
-                    F.lit(",".join(transformation.input_cols or [])),
-                ).otherwise(columns_expr)
-            rules = metadata.select(
-                rule_expr.alias("_dq_rule_name"),
-                columns_expr.alias("_dq_columns"),
+            rules = spark.createDataFrame(
+                [
+                    (
+                        f"{rule_index}:{transformation.name}",
+                        transformation.name,
+                        ",".join(transformation.input_cols or []),
+                    )
+                    for rule_index, transformation in enumerate(transformations)
+                ],
+                ["_dq_rule_id", "_dq_rule_name", "_dq_columns"],
             )
             return (
-                rules.join(failures, ["_dq_rule_name", "_dq_columns"], "left")
+                rules.join(
+                    failures,
+                    ["_dq_rule_id", "_dq_rule_name", "_dq_columns"],
+                    "left",
+                )
                 .select(
                     "_dq_rule_name",
                     "_dq_columns",
