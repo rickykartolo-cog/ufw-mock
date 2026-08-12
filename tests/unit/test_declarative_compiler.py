@@ -3,14 +3,16 @@ from pathlib import Path
 import pytest
 
 from ufw_mock.declarative.compiler import (
+    DatasetDef,
     SdpPipelineCompiler,
     dataset_name_for_task,
     normalize_path,
     slugify,
 )
+from ufw_mock.declarative.registrar import publish_legacy_paths
 from ufw_mock.models.pipeline import Pipeline
 from ufw_mock.models.task import Task
-from ufw_mock.types import EdgeDirection, EdgeProtocol, TaskType, WriteMode
+from ufw_mock.types import DeclarativeDatasetKind, EdgeDirection, EdgeProtocol, TaskType, WriteMode
 
 
 def task(task_id: str, source: str, target: str, **properties) -> Task:
@@ -73,6 +75,19 @@ def test_near_miss_and_later_producer_are_external(tmp_path: Path, monkeypatch) 
     resolutions = SdpPipelineCompiler(config).resolve_paths()
     assert resolutions[0].kind == "EXTERNAL"
     assert resolutions[1].kind == "EXTERNAL"
+
+
+def test_latest_earlier_producer_wins_for_reused_path() -> None:
+    config = pipeline(
+        [
+            task("first", "input-a", "shared"),
+            task("second", "input-b", "shared"),
+            task("consumer", "shared", "output"),
+        ]
+    )
+    resolutions = SdpPipelineCompiler(config).resolve_paths()
+    assert resolutions[2].kind == "INTERNAL"
+    assert resolutions[2].producer_task_id == "second"
 
 
 def test_compiler_emits_internal_upstream_and_validate_passthrough() -> None:
@@ -151,3 +166,87 @@ def test_declarative_configuration_rejects_static_warehouse_key() -> None:
             },
             tasks=[task("one", "in", "out")],
         )
+
+
+def test_legacy_publishing_keys_definitions_by_task_id(monkeypatch, tmp_path: Path) -> None:
+    class FakeReader:
+        def __init__(self) -> None:
+            self.read_names: list[str] = []
+
+        def table(self, name: str) -> object:
+            self.read_names.append(name)
+            return object()
+
+    class FakeSpark:
+        def __init__(self) -> None:
+            self.read = FakeReader()
+
+    class FakeFormat:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, _df: object, path: str, _target: object) -> None:
+            self.writes.append(path)
+
+    fake_format = FakeFormat()
+    monkeypatch.setattr("ufw_mock.formats.get_format", lambda _format: fake_format)
+    config = Pipeline(
+        name="publish-alignment",
+        edge_nodes=[
+            {
+                "name": "files",
+                "direction": EdgeDirection.INBOUND,
+                "protocol": EdgeProtocol.FILE,
+                "properties": {"base_path": str(tmp_path)},
+            }
+        ],
+        tasks=[
+            {
+                "id": "first",
+                "type": "INGEST",
+                "source": {"edge_node": "files", "path": "input-a"},
+                "target": {"edge_node": "files", "path": "first"},
+            },
+            {
+                "id": "second",
+                "type": "INGEST",
+                "source": {"edge_node": "files", "path": "input-b"},
+                "target": {"edge_node": "files", "path": "second"},
+            },
+        ],
+    )
+    definitions = [
+        DatasetDef(
+            name="_dq_summary",
+            kind=DeclarativeDatasetKind.MATERIALIZED_VIEW,
+            task_id="_dq_summary",
+            upstream=(),
+            options={},
+            builder=lambda _spark: None,
+            source_path="",
+            target_path="",
+            publish_legacy_path=False,
+        ),
+        *[
+            DatasetDef(
+                name=task_id,
+                kind=DeclarativeDatasetKind.MATERIALIZED_VIEW,
+                task_id=task_id,
+                upstream=(),
+                options={},
+                builder=lambda _spark: None,
+                source_path="",
+                target_path=target,
+                publish_legacy_path=True,
+            )
+            for task_id, target in (("first", "first"), ("second", "second"))
+        ],
+    ]
+
+    fake_spark = FakeSpark()
+    status, errors = publish_legacy_paths(fake_spark, config, definitions)
+
+    assert status == "succeeded"
+    assert errors == []
+    assert fake_spark.read.read_names == ["first", "second"]
+    assert fake_format.writes == [str(tmp_path / "first"), str(tmp_path / "second")]

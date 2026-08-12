@@ -98,30 +98,6 @@
           "title": "Owner",
           "type": "string"
         },
-        "catalog": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Catalog"
-        },
-        "database": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Database"
-        },
         "properties": {
           "type": "object",
           "additionalProperties": true,

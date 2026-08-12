@@ -8,6 +8,7 @@ from pyspark.sql import SparkSession
 
 from ufw_mock.declarative.compiler import DatasetDef
 from ufw_mock.models.pipeline import Pipeline
+from ufw_mock.runtime.platform import PlatformAdapter
 
 
 LOGGER = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ class DeclarativeRunResult:
     publish_errors: list[dict[str, str]] = field(default_factory=list)
 
 
-def run_graph_attempt(
+def register_and_run(
     spark: SparkSession,
     pipeline: Pipeline,
     definitions: list[DatasetDef],
@@ -92,25 +93,6 @@ def run_graph_attempt(
         graph_status="dry_run_succeeded" if dry else "succeeded",
         events=events,
         graph_id=graph_id,
-        mapping={definition.target_path: definition.name for definition in definitions if definition.target_path},
-    )
-
-
-def register_and_run(
-    spark: SparkSession,
-    pipeline: Pipeline,
-    definitions: list[DatasetDef],
-    *,
-    dry: bool = False,
-    full_refresh_all: bool = False,
-) -> DeclarativeRunResult:
-    """Create a new graph and execute one declarative attempt."""
-    return run_graph_attempt(
-        spark,
-        pipeline,
-        definitions,
-        dry=dry,
-        full_refresh_all=full_refresh_all,
     )
 
 
@@ -124,9 +106,13 @@ def publish_legacy_paths(
     from ufw_mock.runtime.edge_node_registry import EdgeNodeRegistry
 
     registry = EdgeNodeRegistry(pipeline.edge_nodes)
+    definitions_by_task = {definition.task_id: definition for definition in definitions}
     errors: list[dict[str, str]] = []
     attempted = False
-    for definition, task in zip(definitions, pipeline.tasks):
+    for task in pipeline.tasks:
+        definition = definitions_by_task.get(task.id)
+        if definition is None:
+            continue
         if not definition.target_path or not definition.publish_legacy_path:
             continue
         attempted = True
@@ -145,7 +131,7 @@ def publish_legacy_paths(
 
 def run_declarative_pipeline(
     pipeline: Pipeline,
-    platform: Any,
+    platform: PlatformAdapter,
     *,
     dry: bool = False,
     full_refresh_all: bool = False,

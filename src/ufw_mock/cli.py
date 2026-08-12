@@ -2,9 +2,9 @@ import argparse
 import json
 import sys
 
+from ufw_mock.declarative.registrar import run_declarative_pipeline
 from ufw_mock.models.pipeline import Pipeline
 from ufw_mock.models.platform import Platform
-from ufw_mock.declarative.registrar import run_declarative_pipeline
 from ufw_mock.runtime.platform import get_platform
 from ufw_mock.runtime.pipeline_runner import PipelineRunner
 from ufw_mock.validation.schema_loader import validate_pipeline_config
@@ -48,6 +48,12 @@ def main(argv: list[str] | None = None) -> int:
         print("Config is valid.")
         return 0
 
+    if args.mode == "declarative" and pipeline.declarative is None:
+        print("CONFIG ERROR: declarative.storage is required when --mode declarative is used.", file=sys.stderr)
+        return 1
+    if args.mode == "imperative" and (args.dry_run or args.full_refresh_all):
+        parser.error("--dry-run and --full-refresh-all require --mode declarative")
+
     raw_platform = raw_config.get("platform", {})
     platform_name = (
         "spark_declarative"
@@ -58,9 +64,6 @@ def main(argv: list[str] | None = None) -> int:
     platform = get_platform(platform_config)
 
     if args.mode == "declarative":
-        if pipeline.declarative is None:
-            print("CONFIG ERROR: declarative.storage is required when --mode declarative is used.", file=sys.stderr)
-            return 1
         try:
             summary = run_declarative_pipeline(
                 pipeline,
@@ -75,9 +78,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"PATH_MAPPING: {path} -> {dataset}")
         print(json.dumps(summary, indent=2))
         return 0
-
-    if args.dry_run or args.full_refresh_all:
-        parser.error("--dry-run and --full-refresh-all require --mode declarative")
 
     with PipelineRunner(pipeline, platform) as runner:
         summary = runner.run()

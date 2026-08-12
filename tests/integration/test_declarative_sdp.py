@@ -2,6 +2,7 @@ import importlib.util
 
 import pytest
 
+from ufw_mock.declarative.compiler import SdpPipelineCompiler
 from ufw_mock.declarative.registrar import run_declarative_pipeline
 from ufw_mock.models.pipeline import Pipeline
 from ufw_mock.models.platform import Platform
@@ -46,10 +47,18 @@ def test_programmatic_sdp_pipeline(tmp_path):
     )
     spark_writer.stop()
 
+    definitions = SdpPipelineCompiler(pipeline).compile()
+    assert definitions[1].upstream == (definitions[0].name,)
+
     platform = get_platform(Platform(name="spark_declarative", config={"remote": "local"}))
     try:
         summary = run_declarative_pipeline(pipeline, platform)
         assert summary["graph_status"] == "succeeded"
         assert summary["publish_status"] == "succeeded"
+        legacy_path = tmp_path / "output"
+        assert list(legacy_path.glob("*.parquet"))
+        spark = platform.get_spark_session("sdp-integration-check")
+        rows = sorted(row.id for row in spark.read.parquet(str(legacy_path)).collect())
+        assert rows == [1, 2]
     finally:
         platform.shutdown()

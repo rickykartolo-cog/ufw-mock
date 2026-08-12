@@ -32,6 +32,70 @@ ufw-run --config examples/kyc_pipeline.json --validate-only
 pytest -q
 ```
 
+## Declarative mode (Spark Declarative Pipelines)
+
+The same pipeline JSON can run through Spark Declarative Pipelines in batch
+mode:
+
+```bash
+uv pip install -e ".[declarative]"
+ufw-run --config examples/kyc_pipeline_runnable.json --mode declarative
+```
+
+Declarative mode uses Spark Connect. The optional `declarative` dependency
+installs `pyspark[pipelines]>=4.1`; it is not installed by the default
+dependency set.
+
+Add a top-level `declarative` block to a pipeline when using this mode:
+
+```json
+{
+  "declarative": {
+    "storage": "file:///tmp/ufw-mock/pipeline-storage",
+    "catalog": "spark_catalog",
+    "database": "default",
+    "configuration": {
+      "spark.sql.shuffle.partitions": "2"
+    },
+    "publish_legacy_paths": true,
+    "dq": {
+      "mode": "in_graph",
+      "fail_on_violation": false
+    }
+  }
+}
+```
+
+`storage` is the SDP pipeline storage location. `catalog` and `database`
+provide the graph defaults, `configuration` contains Spark SQL settings,
+`publish_legacy_paths` controls export to existing target paths, and `dq`
+accepts the current DQ settings. `spark.sql.warehouse.dir` is rejected in
+`configuration` because it is a static Spark setting.
+
+Use `--dry-run` to validate the graph without materializing datasets. It
+prints the mapping from each non-empty `target.path` to its generated dataset
+name. Use `--full-refresh-all` to request a full refresh of all declarative
+datasets:
+
+```bash
+ufw-run --config examples/kyc_pipeline_runnable.json \
+  --mode declarative --dry-run
+ufw-run --config examples/kyc_pipeline_runnable.json \
+  --mode declarative --full-refresh-all
+```
+
+Dataset names default to a SQL-safe slug of the task ID and can be overridden
+with `task.properties.dataset_name`. Internal task dependencies read the
+upstream named dataset. After the graph completes, the compatibility shim
+reads each produced dataset and writes it to the configured `target.path`
+through the existing format adapter, so declarative execution currently has
+the cost of writing the dataset and then exporting it to the legacy path.
+
+The current declarative backend supports batch materialized views only.
+Streaming datasets, `MERGE`, `ignore`, and `error_if_exists` write modes are
+unsupported. `VALIDATE` tasks are pass-through datasets until phase 3 adds
+in-graph DQ datasets.
+
 ## Project layout
 
 ```

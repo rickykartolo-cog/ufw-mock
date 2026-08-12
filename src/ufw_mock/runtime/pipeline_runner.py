@@ -5,6 +5,7 @@ from ufw_mock.models.platform import Platform
 from ufw_mock.runtime.edge_node_registry import EdgeNodeRegistry
 from ufw_mock.runtime.platform import PlatformAdapter, get_platform
 from ufw_mock.runtime.task_executor import TaskExecutor
+from ufw_mock.types import PlatformType
 
 
 class PipelineRunner:
@@ -41,7 +42,7 @@ def run_pipeline(config_path: str, platform_name: str = "local_pyspark") -> dict
     pipeline = Pipeline.model_validate(raw_config)
     platform = get_platform(platform_config)
 
-    if platform_config.name.value == "spark_declarative":
+    if platform_config.name == PlatformType.SPARK_DECLARATIVE:
         from ufw_mock.declarative.registrar import run_declarative_pipeline
 
         try:

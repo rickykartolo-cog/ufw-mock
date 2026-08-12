@@ -76,17 +76,22 @@ class SdpPipelineCompiler:
         self.transform_registry = TransformRegistry()
 
     def resolve_paths(self) -> list[PathResolution]:
-        producers: dict[str, tuple[int, str]] = {}
+        producers: dict[str, list[tuple[int, str]]] = {}
         for index, task in enumerate(self.pipeline.tasks):
             resolved = self._resolve_target(task)
-            if task.target.path and resolved not in producers:
-                producers[resolved] = (index, task.id)
+            if task.target.path:
+                producers.setdefault(resolved, []).append((index, task.id))
 
         resolutions: list[PathResolution] = []
         for index, task in enumerate(self.pipeline.tasks):
             source_path = self._resolve_source(task)
-            producer = producers.get(source_path)
-            is_internal = producer is not None and producer[0] < index
+            earlier_producers = [
+                producer
+                for producer in producers.get(source_path, [])
+                if producer[0] < index
+            ]
+            producer = max(earlier_producers, default=None, key=lambda item: item[0])
+            is_internal = producer is not None
             resolutions.append(
                 PathResolution(
                     task_id=task.id,
