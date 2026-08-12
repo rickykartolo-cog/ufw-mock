@@ -22,6 +22,7 @@ class DeclarativeRunResult:
     graph_id: str | None = None
     mapping: dict[str, str] = field(default_factory=dict)
     publish_errors: list[dict[str, str]] = field(default_factory=list)
+    dq_violations: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
 
 def register_and_run(
@@ -129,6 +130,30 @@ def publish_legacy_paths(
     return ("succeeded" if not errors else "partial_failure"), errors
 
 
+def collect_dq_violations(
+    spark: SparkSession,
+    definitions: list[DatasetDef],
+) -> dict[str, list[dict[str, Any]]]:
+    violations: dict[str, list[dict[str, Any]]] = {}
+    summary_definitions = [
+        definition
+        for definition in definitions
+        if definition.name.endswith("_dq_summary")
+    ]
+    for definition in summary_definitions:
+        task_id = definition.task_id.removesuffix("__dq_summary")
+        rows = spark.read.table(definition.name).collect()
+        violations[task_id] = [
+            {
+                "rule": row["_dq_rule_name"],
+                "columns": row["_dq_columns"],
+                "count": row["violation_count"],
+            }
+            for row in rows
+        ]
+    return violations
+
+
 def run_declarative_pipeline(
     pipeline: Pipeline,
     platform: PlatformAdapter,
@@ -148,6 +173,8 @@ def run_declarative_pipeline(
         full_refresh_all=full_refresh_all,
     )
     if not dry and result.graph_status == "succeeded":
+        result.dq_violations = collect_dq_violations(spark, definitions)
+    if not dry and result.graph_status == "succeeded":
         result.publish_status, result.publish_errors = publish_legacy_paths(
             spark,
             pipeline,
@@ -158,12 +185,40 @@ def run_declarative_pipeline(
         for definition in definitions
         if definition.target_path
     }
+    violation_tasks = {
+        task_id
+        for task_id, rules in result.dq_violations.items()
+        if any(rule["count"] > 0 for rule in rules)
+    }
+    has_violations = bool(violation_tasks)
+    gate_failed = bool(
+        pipeline.declarative
+        and pipeline.declarative.dq.fail_on_violation
+        and has_violations
+    )
     return {
         "pipeline": pipeline.name,
+        "status": "failed" if gate_failed else "succeeded",
         "graph_status": result.graph_status,
         "publish_status": result.publish_status,
         "events": result.events,
         "mapping": result.mapping,
         "publish_errors": result.publish_errors,
-        "tasks": [{"id": definition.task_id, "dataset": definition.name} for definition in definitions],
+        "dq_violations": result.dq_violations,
+        "tasks": [
+            {
+                "id": task.id,
+                "dataset": next(
+                    definition.name
+                    for definition in definitions
+                    if definition.task_id == task.id
+                ),
+                "status": (
+                    "passed_with_violations"
+                    if task.id in violation_tasks
+                    else "success"
+                ),
+            }
+            for task in pipeline.tasks
+        ],
     }

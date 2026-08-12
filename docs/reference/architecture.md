@@ -139,8 +139,20 @@ the original `target.path`; this preserves legacy consumers but incurs a
 second write.
 
 The current backend supports batch materialized views only. Streaming datasets,
-`MERGE`, `ignore`, and `error_if_exists` are unsupported. `VALIDATE` tasks
-compile as pass-through datasets until in-graph DQ support is added.
+`MERGE`, `ignore`, and `error_if_exists` are unsupported. A `VALIDATE` task
+compiles to a pass-through dataset plus `<dataset>_dq_failures` and
+`<dataset>_dq_summary` materialized views when rules are present. The failures
+view contains offending rows annotated with rule name and columns; the summary
+view contains one violation count per rule. These generated datasets have no
+legacy target path and are not exported by the compatibility shim.
+
+Declarative DQ is non-blocking by default. A violating task is reported as
+`passed_with_violations`, while the graph and legacy publishing complete. Set
+`declarative.dq.fail_on_violation` to `true` to fail the declarative command
+after graph completion without removing the generated DQ tables. Imperative
+execution retains its fail-fast `ValidationError` behavior, so the same
+configuration can fail imperatively while succeeding declaratively with
+reported violations.
 
 ## 6. Edge Node Strategy
 

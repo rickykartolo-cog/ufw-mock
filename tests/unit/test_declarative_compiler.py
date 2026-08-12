@@ -12,6 +12,7 @@ from ufw_mock.declarative.compiler import (
 from ufw_mock.declarative.registrar import publish_legacy_paths
 from ufw_mock.models.pipeline import Pipeline
 from ufw_mock.models.task import Task
+from ufw_mock.runtime.validation_registry import ValidationRegistry
 from ufw_mock.types import DeclarativeDatasetKind, EdgeDirection, EdgeProtocol, TaskType, WriteMode
 
 
@@ -107,8 +108,69 @@ def test_compiler_emits_internal_upstream_and_validate_passthrough() -> None:
     assert [(item.name, item.upstream) for item in definitions] == [
         ("ingest", ()),
         ("validate", ("ingest",)),
+        ("validate_dq_failures", ("validate",)),
+        ("validate_dq_summary", ("validate_dq_failures",)),
     ]
     assert definitions[1].kind.value == "materialized_view"
+
+
+def test_validate_without_rules_has_no_dq_datasets() -> None:
+    config = pipeline(
+        [
+            Task(
+                id="validate",
+                type=TaskType.VALIDATE,
+                source={"edge_node": "files", "path": "input"},
+                target={"edge_node": "files", "path": ""},
+            )
+        ]
+    )
+    assert [definition.name for definition in SdpPipelineCompiler(config).compile()] == ["validate"]
+
+
+def test_validate_generated_dataset_names_collide_with_user_names() -> None:
+    config = pipeline(
+        [
+            Task(
+                id="validate",
+                type=TaskType.VALIDATE,
+                source={"edge_node": "files", "path": "input"},
+                target={"edge_node": "files", "path": ""},
+                transformations=[{"name": "rule", "type": "not_null", "input_cols": ["id"]}],
+            ),
+            task("validate_dq_failures", "other", "output"),
+        ]
+    )
+    with pytest.raises(ValueError, match="generated dataset"):
+        SdpPipelineCompiler(config).compile()
+
+
+def test_validation_registry_exposes_predicates_and_rejects_custom_without_one() -> None:
+    registry = ValidationRegistry()
+    for key in ("not_null", "range", "regex", "unique"):
+        assert callable(registry.get_predicate(key))
+
+    registry.register("custom", lambda _df, _rule: None)
+    with pytest.raises(NotImplementedError, match="does not expose"):
+        registry.get_predicate("custom")
+
+
+def test_custom_validator_without_predicate_is_rejected_by_compiler() -> None:
+    config = pipeline(
+        [
+            Task(
+                id="validate",
+                type=TaskType.VALIDATE,
+                source={"edge_node": "files", "path": "input"},
+                target={"edge_node": "files", "path": ""},
+                transformations=[{"name": "custom-rule", "type": "custom", "input_cols": ["id"]}],
+            )
+        ]
+    )
+    compiler = SdpPipelineCompiler(config)
+    compiler.validation_registry.register("custom", lambda _df, _rule: None)
+    with pytest.raises(NotImplementedError, match="custom"):
+        compiler.compile()
 
 
 @pytest.mark.parametrize("mode", [WriteMode.MERGE, WriteMode.IGNORE, WriteMode.ERROR_IF_EXISTS])

@@ -76,8 +76,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.dry_run:
             for path, dataset in summary["mapping"].items():
                 print(f"PATH_MAPPING: {path} -> {dataset}")
+        for task_id, rules in summary.get("dq_violations", {}).items():
+            for rule in rules:
+                print(
+                    f"DQ: {task_id} rule={rule['rule']} "
+                    f"columns={rule['columns']} violations={rule['count']}"
+                )
         print(json.dumps(summary, indent=2))
-        return 0
+        return 1 if summary["status"] == "failed" else 0
 
     with PipelineRunner(pipeline, platform) as runner:
         summary = runner.run()

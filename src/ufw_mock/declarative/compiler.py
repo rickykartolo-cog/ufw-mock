@@ -6,12 +6,15 @@ from typing import Any, Callable
 from urllib.parse import urlsplit, urlunsplit
 
 from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import functions as F
 
 from ufw_mock.formats import get_format
 from ufw_mock.models.pipeline import Pipeline
 from ufw_mock.models.task import Task
+from ufw_mock.models.transformation import Transformation
 from ufw_mock.runtime.edge_node_registry import EdgeNodeRegistry
 from ufw_mock.runtime.transform_registry import TransformRegistry
+from ufw_mock.runtime.validation_registry import ValidationRegistry
 from ufw_mock.types import DeclarativeDatasetKind, EdgeProtocol, TaskType, WriteMode
 
 
@@ -74,6 +77,7 @@ class SdpPipelineCompiler:
         self.pipeline = pipeline
         self.edge_registry = EdgeNodeRegistry(pipeline.edge_nodes)
         self.transform_registry = TransformRegistry()
+        self.validation_registry = ValidationRegistry()
 
     def resolve_paths(self) -> list[PathResolution]:
         producers: dict[str, list[tuple[int, str]]] = {}
@@ -113,6 +117,18 @@ class SdpPipelineCompiler:
                     f"Dataset name collision: tasks {previous!r} and {task.id!r} both resolve to {name!r}."
                 )
             names[name] = task.id
+        for task in self.pipeline.tasks:
+            if task.type != TaskType.VALIDATE or not task.transformations:
+                continue
+            base_name = dataset_name_for_task(task)
+            for suffix in ("dq_failures", "dq_summary"):
+                generated_name = f"{base_name}_{suffix}"
+                if generated_name in names:
+                    raise ValueError(
+                        f"Dataset name collision: generated dataset for task {task.id!r} "
+                        f"conflicts with {generated_name!r}."
+                    )
+                names[generated_name] = task.id
 
         resolutions = {item.task_id: item for item in self.resolve_paths()}
         dataset_names = {task.id: dataset_name_for_task(task) for task in self.pipeline.tasks}
@@ -127,26 +143,62 @@ class SdpPipelineCompiler:
             )
             kind = self._dataset_kind(task)
             builder = self._build_builder(task, resolution, dataset_names)
-            definitions.append(
-                DatasetDef(
-                    name=dataset_names[task.id],
-                    kind=kind,
-                    task_id=task.id,
-                    upstream=upstream,
-                    options=self._dataset_options(task),
-                    builder=builder,
-                    source_path=task.source.path,
-                    target_path=task.target.path,
-                    publish_legacy_path=bool(
-                        task.properties.get(
-                            "publish_legacy_path",
-                            self.pipeline.declarative.publish_legacy_paths
-                            if self.pipeline.declarative
-                            else True,
-                        )
-                    ),
-                )
+            base_definition = DatasetDef(
+                name=dataset_names[task.id],
+                kind=kind,
+                task_id=task.id,
+                upstream=upstream,
+                options=self._dataset_options(task),
+                builder=builder,
+                source_path=task.source.path,
+                target_path=task.target.path,
+                publish_legacy_path=bool(
+                    task.properties.get(
+                        "publish_legacy_path",
+                        self.pipeline.declarative.publish_legacy_paths
+                        if self.pipeline.declarative
+                        else True,
+                    )
+                ),
             )
+            definitions.append(base_definition)
+            if task.type == TaskType.VALIDATE and task.transformations:
+                for transformation in task.transformations:
+                    self.validation_registry.get_predicate(transformation.type)
+                failures_name = f"{base_definition.name}_dq_failures"
+                summary_name = f"{base_definition.name}_dq_summary"
+                definitions.extend(
+                    [
+                        DatasetDef(
+                            name=failures_name,
+                            kind=DeclarativeDatasetKind.MATERIALIZED_VIEW,
+                            task_id=f"{task.id}__dq_failures",
+                            upstream=(base_definition.name,),
+                            options={},
+                            builder=self._build_dq_failures_builder(
+                                base_definition.name,
+                                task.transformations,
+                            ),
+                            source_path=task.source.path,
+                            target_path="",
+                            publish_legacy_path=False,
+                        ),
+                        DatasetDef(
+                            name=summary_name,
+                            kind=DeclarativeDatasetKind.MATERIALIZED_VIEW,
+                            task_id=f"{task.id}__dq_summary",
+                            upstream=(failures_name,),
+                            options={},
+                            builder=self._build_dq_summary_builder(
+                                failures_name,
+                                task.transformations,
+                            ),
+                            source_path=task.source.path,
+                            target_path="",
+                            publish_legacy_path=False,
+                        ),
+                    ]
+                )
         return definitions
 
     def _resolve_source(self, task: Task) -> str:
@@ -230,7 +282,67 @@ class SdpPipelineCompiler:
             if task.type != TaskType.VALIDATE:
                 for transformation in transformations:
                     df = transform_registry.apply(df, transformation)
-            # TODO(phase 3): attach DQ failure and summary datasets here.
             return df
+
+        return builder
+
+    def _build_dq_failures_builder(
+        self,
+        base_name: str,
+        transformations: tuple[Transformation, ...],
+    ) -> Builder:
+        validation_registry = self.validation_registry
+
+        def builder(spark: SparkSession) -> DataFrame:
+            base = spark.read.table(base_name)
+            failures: list[DataFrame] = []
+            for transformation in transformations:
+                failures.append(
+                    validation_registry.failing_rows(base, transformation)
+                    .withColumn("_dq_rule_name", F.lit(transformation.name))
+                    .withColumn("_dq_columns", F.lit(",".join(transformation.input_cols or [])))
+                )
+            result = failures[0]
+            for failure in failures[1:]:
+                result = result.unionByName(failure)
+            return result
+
+        return builder
+
+    def _build_dq_summary_builder(
+        self,
+        failures_name: str,
+        transformations: tuple[Transformation, ...],
+    ) -> Builder:
+        def builder(spark: SparkSession) -> DataFrame:
+            failures = (
+                spark.read.table(failures_name)
+                .groupBy("_dq_rule_name", "_dq_columns")
+                .count()
+            )
+            metadata = spark.range(len(transformations))
+            rule_expr = F.lit(transformations[0].name)
+            columns_expr = F.lit(",".join(transformations[0].input_cols or []))
+            for index, transformation in enumerate(transformations[1:], 1):
+                rule_expr = F.when(
+                    F.col("id") == index,
+                    F.lit(transformation.name),
+                ).otherwise(rule_expr)
+                columns_expr = F.when(
+                    F.col("id") == index,
+                    F.lit(",".join(transformation.input_cols or [])),
+                ).otherwise(columns_expr)
+            rules = metadata.select(
+                rule_expr.alias("_dq_rule_name"),
+                columns_expr.alias("_dq_columns"),
+            )
+            return (
+                rules.join(failures, ["_dq_rule_name", "_dq_columns"], "left")
+                .select(
+                    "_dq_rule_name",
+                    "_dq_columns",
+                    F.coalesce(F.col("count"), F.lit(0)).alias("violation_count"),
+                )
+            )
 
         return builder

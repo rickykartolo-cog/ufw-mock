@@ -93,8 +93,17 @@ the cost of writing the dataset and then exporting it to the legacy path.
 
 The current declarative backend supports batch materialized views only.
 Streaming datasets, `MERGE`, `ignore`, and `error_if_exists` write modes are
-unsupported. `VALIDATE` tasks are pass-through datasets until phase 3 adds
-in-graph DQ datasets.
+unsupported. A `VALIDATE` task remains in the graph as a pass-through dataset
+and, when it has rules, also produces `<dataset>_dq_failures` and
+`<dataset>_dq_summary` datasets. The failures dataset contains offending rows
+with rule metadata; the summary contains one count per rule.
+
+Declarative DQ is non-blocking by default. The run completes and the task is
+reported as `passed_with_violations`. Set
+`declarative.dq.fail_on_violation` to `true` to make the overall declarative
+command fail after the graph completes; the DQ tables and other graph outputs
+remain available. The same configuration can therefore fail fast in
+imperative mode while succeeding with reported violations in declarative mode.
 
 ## Project layout
 
