@@ -1,5 +1,74 @@
 {
   "$defs": {
+    "DeclarativeConfig": {
+      "properties": {
+        "storage": {
+          "minLength": 1,
+          "title": "Storage",
+          "type": "string"
+        },
+        "catalog": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catalog"
+        },
+        "database": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Database"
+        },
+        "configuration": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Configuration",
+          "type": "object"
+        },
+        "publish_legacy_paths": {
+          "default": true,
+          "title": "Publish Legacy Paths",
+          "type": "boolean"
+        },
+        "dq": {
+          "$ref": "#/$defs/DeclarativeDQConfig"
+        }
+      },
+      "required": [
+        "storage"
+      ],
+      "title": "DeclarativeConfig",
+      "type": "object"
+    },
+    "DeclarativeDQConfig": {
+      "properties": {
+        "mode": {
+          "default": "in_graph",
+          "title": "Mode",
+          "type": "string"
+        },
+        "fail_on_violation": {
+          "default": false,
+          "title": "Fail On Violation",
+          "type": "boolean"
+        }
+      },
+      "title": "DeclarativeDQConfig",
+      "type": "object"
+    },
     "EdgeDirection": {
       "enum": [
         "INBOUND",
@@ -360,6 +429,17 @@
       "type": "object",
       "additionalProperties": true,
       "title": "Properties"
+    },
+    "declarative": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DeclarativeConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "edge_nodes": {
       "items": {

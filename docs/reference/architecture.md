@@ -100,6 +100,60 @@ Databricks/Iceberg ecosystem while remaining data-platform-agnostic.
 - In the mock, this is a contract/stub; a real deployment would wire in
   Databricks-specific utilities.
 
+### Spark Declarative Pipelines (`SparkDeclarativePlatform`)
+
+Declarative mode compiles the existing `Pipeline` model into named Spark
+Declarative Pipelines datasets and graph dependencies. It uses Spark Connect
+and is enabled with the optional dependency:
+
+```bash
+uv pip install -e ".[declarative]"
+```
+
+The top-level `declarative` configuration block contains:
+
+- `storage`: required SDP pipeline storage location.
+- `catalog`: optional default catalog for the graph.
+- `database`: optional default database for the graph.
+- `configuration`: Spark SQL settings passed when creating the graph.
+- `publish_legacy_paths`: whether completed datasets are exported to their
+  existing target paths; defaults to `true`.
+- `dq`: currently accepts `mode: "in_graph"` and `fail_on_violation`; DQ
+  datasets are not part of the current backend.
+
+`spark.sql.warehouse.dir` is rejected in `configuration` because Spark treats
+it as a static setting. Run with:
+
+```bash
+ufw-run --config examples/kyc_pipeline_runnable.json --mode declarative
+```
+
+The declarative CLI also supports `--dry-run` and `--full-refresh-all`.
+`--dry-run` prints the path-to-dataset mapping without publishing legacy
+paths. Dataset names default to SQL-safe slugs of task IDs and can be
+overridden with `task.properties.dataset_name`. A source path matching an
+earlier task's target path reads that task's named dataset rather than
+re-reading the file. After a successful graph run, the compatibility shim
+reads each named dataset and writes it through the existing format adapter to
+the original `target.path`; this preserves legacy consumers but incurs a
+second write.
+
+The current backend supports batch materialized views only. Streaming datasets,
+`MERGE`, `ignore`, and `error_if_exists` are unsupported. A `VALIDATE` task
+compiles to a pass-through dataset plus `<dataset>_dq_failures` and
+`<dataset>_dq_summary` materialized views when rules are present. The failures
+view contains offending rows annotated with rule name and columns; the summary
+view contains one violation count per rule. These generated datasets have no
+legacy target path and are not exported by the compatibility shim.
+
+Declarative DQ is non-blocking by default. A violating task is reported as
+`passed_with_violations`, while the graph and legacy publishing complete. Set
+`declarative.dq.fail_on_violation` to `true` to fail the declarative command
+after graph completion without removing the generated DQ tables. Imperative
+execution retains its fail-fast `ValidationError` behavior, so the same
+configuration can fail imperatively while succeeding declaratively with
+reported violations.
+
 ## 6. Edge Node Strategy
 
 Edge nodes isolate source systems from the core platform. The mock supports

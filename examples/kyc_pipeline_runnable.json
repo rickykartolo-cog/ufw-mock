@@ -13,6 +13,17 @@
       "spark.sql.shuffle.partitions": "2"
     }
   },
+  "declarative": {
+    "storage": "file:///tmp/ufw-mock/kyc-pipeline-storage",
+    "configuration": {
+      "spark.sql.shuffle.partitions": "2"
+    },
+    "publish_legacy_paths": true,
+    "dq": {
+      "mode": "in_graph",
+      "fail_on_violation": false
+    }
+  },
   "edge_nodes": [
     {
       "name": "inbound-crm",
