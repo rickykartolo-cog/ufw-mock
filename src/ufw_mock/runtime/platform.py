@@ -70,4 +70,8 @@ def get_platform(platform_config: PlatformConfig) -> PlatformAdapter:
         return LocalPySparkPlatform(platform_config.config)
     if platform_config.name == PlatformType.DATABRICKS:
         return DatabricksPlatform(platform_config.config)
+    if platform_config.name == PlatformType.SPARK_DECLARATIVE:
+        from ufw_mock.declarative.platform import SparkDeclarativePlatform
+
+        return SparkDeclarativePlatform(platform_config.config)
     raise ValueError(f"Unsupported platform: {platform_config.name}")

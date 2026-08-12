@@ -38,5 +38,12 @@ class WriteMode(str, Enum):
 
 class PlatformType(str, Enum):
     LOCAL_PYSPARK = "local_pyspark"
+    SPARK_DECLARATIVE = "spark_declarative"
     DATABRICKS = "databricks"
     CLOUDERA = "cloudera"
+
+
+class DeclarativeDatasetKind(str, Enum):
+    MATERIALIZED_VIEW = "materialized_view"
+    STREAMING_TABLE = "streaming_table"
+    TEMPORARY_VIEW = "temporary_view"

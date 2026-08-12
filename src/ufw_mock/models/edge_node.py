@@ -12,4 +12,6 @@ class EdgeNode(BaseModel):
     direction: EdgeDirection = Field(..., description="Whether this edge receives or publishes data.")
     protocol: EdgeProtocol = Field(default=EdgeProtocol.FILE)
     owner: str = Field(default="central-data-platform")
+    catalog: str | None = None
+    database: str | None = None
     properties: dict[str, Any] = Field(default_factory=dict)

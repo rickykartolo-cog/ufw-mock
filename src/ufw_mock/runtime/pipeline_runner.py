@@ -41,5 +41,13 @@ def run_pipeline(config_path: str, platform_name: str = "local_pyspark") -> dict
     pipeline = Pipeline.model_validate(raw_config)
     platform = get_platform(platform_config)
 
+    if platform_config.name.value == "spark_declarative":
+        from ufw_mock.declarative.registrar import run_declarative_pipeline
+
+        try:
+            return run_declarative_pipeline(pipeline, platform)
+        finally:
+            platform.shutdown()
+
     with PipelineRunner(pipeline, platform) as runner:
         return runner.run()
