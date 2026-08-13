@@ -1,3 +1,11 @@
+from ufw_mock.runtime.dag_resolver import (
+    CyclicDependencyError,
+    DependencyResolutionError,
+    DuplicateTaskIdError,
+    UnknownDependencyError,
+    build_dependency_graph,
+    resolve_execution_order,
+)
 from ufw_mock.runtime.pipeline_runner import PipelineRunner, run_pipeline
 from ufw_mock.runtime.platform import (
     DatabricksPlatform,
@@ -20,4 +28,10 @@ __all__ = [
     "TransformRegistry",
     "ValidationRegistry",
     "ValidationError",
+    "build_dependency_graph",
+    "resolve_execution_order",
+    "DependencyResolutionError",
+    "CyclicDependencyError",
+    "UnknownDependencyError",
+    "DuplicateTaskIdError",
 ]

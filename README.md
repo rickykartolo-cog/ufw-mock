@@ -32,6 +32,26 @@ ufw-run --config examples/kyc_pipeline.json --validate-only
 pytest -q
 ```
 
+## Dependency-resolved execution
+
+Tasks may declare upstream dependencies, and the runner topologically sorts them
+before execution (SDP-style declarative graph rather than authoring order):
+
+```json
+{
+  "id": "publish-customer-outbound",
+  "type": "PUBLISH",
+  "depends_on": ["validate-customer-quality"],
+  "output_dataset": "outbound.customers"
+}
+```
+
+A task also implicitly depends on the task whose `output_dataset` matches its
+`source.path` (or `source.properties.dataset`). Cycles, unknown dependency ids,
+and duplicate task ids raise errors before anything runs. Pipelines that declare
+no dependencies execute in authoring order exactly as before — see
+`examples/kyc_pipeline_dag.json` for a declared-dependency pipeline.
+
 ## Project layout
 
 ```
