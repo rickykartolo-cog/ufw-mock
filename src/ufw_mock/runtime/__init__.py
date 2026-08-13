@@ -1,6 +1,7 @@
 from ufw_mock.runtime.dag_resolver import (
     CyclicDependencyError,
     DependencyResolutionError,
+    DuplicateDatasetError,
     DuplicateTaskIdError,
     UnknownDependencyError,
     build_dependency_graph,
@@ -34,4 +35,5 @@ __all__ = [
     "CyclicDependencyError",
     "UnknownDependencyError",
     "DuplicateTaskIdError",
+    "DuplicateDatasetError",
 ]

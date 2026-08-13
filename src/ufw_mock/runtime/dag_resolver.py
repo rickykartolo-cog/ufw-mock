@@ -26,6 +26,10 @@ class DuplicateTaskIdError(DependencyResolutionError):
     """Raised when two tasks share the same id."""
 
 
+class DuplicateDatasetError(DependencyResolutionError):
+    """Raised when two tasks declare the same output_dataset."""
+
+
 def _dataset_references(task: Task) -> set[str]:
     """Dataset names a task reads from, derived from its source."""
     refs = {task.source.path}
@@ -43,7 +47,16 @@ def build_dependency_graph(tasks: list[Task]) -> dict[str, set[str]]:
         raise DuplicateTaskIdError(f"Duplicate task ids in pipeline: {sorted(duplicates)}")
 
     known = set(ids)
-    producers = {task.output_dataset: task.id for task in tasks if task.output_dataset}
+    producers: dict[str, str] = {}
+    for task in tasks:
+        if not task.output_dataset:
+            continue
+        existing = producers.get(task.output_dataset)
+        if existing is not None:
+            raise DuplicateDatasetError(
+                f"Dataset '{task.output_dataset}' is produced by both '{existing}' and '{task.id}'"
+            )
+        producers[task.output_dataset] = task.id
 
     graph: dict[str, set[str]] = {}
     for task in tasks:

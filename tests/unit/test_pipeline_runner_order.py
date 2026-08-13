@@ -33,18 +33,18 @@ def _runner(tasks):
 
 
 def test_run_executes_in_dependency_order():
-    runner = _runner([_task("c", ["b"]), _task("b", ["a"]), _task("a")])
+    runner = _runner([_task("publish", ["clean"]), _task("clean", ["ingest"]), _task("ingest")])
     summary = runner.run()
-    assert runner.task_executor.executed == ["a", "b", "c"]
+    assert runner.task_executor.executed == ["ingest", "clean", "publish"]
     assert summary["status"] == "success"
     assert summary["tasks"] == [
-        {"id": "a", "status": "success"},
-        {"id": "b", "status": "success"},
-        {"id": "c", "status": "success"},
+        {"id": "ingest", "status": "success"},
+        {"id": "clean", "status": "success"},
+        {"id": "publish", "status": "success"},
     ]
 
 
 def test_run_preserves_authoring_order_without_dependencies():
-    runner = _runner([_task("a"), _task("b"), _task("c")])
+    runner = _runner([_task("publish"), _task("ingest"), _task("clean")])
     runner.run()
-    assert runner.task_executor.executed == ["a", "b", "c"]
+    assert runner.task_executor.executed == ["publish", "ingest", "clean"]

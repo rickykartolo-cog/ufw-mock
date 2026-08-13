@@ -48,7 +48,8 @@ before execution (SDP-style declarative graph rather than authoring order):
 
 A task also implicitly depends on the task whose `output_dataset` matches its
 `source.path` (or `source.properties.dataset`). Cycles, unknown dependency ids,
-and duplicate task ids raise errors before anything runs. Pipelines that declare
+duplicate task ids, and two tasks producing the same `output_dataset` raise
+errors before anything runs. Pipelines that declare
 no dependencies execute in authoring order exactly as before — see
 `examples/kyc_pipeline_dag.json` for a declared-dependency pipeline.
 

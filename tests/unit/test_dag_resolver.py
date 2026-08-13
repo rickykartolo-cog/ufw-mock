@@ -4,6 +4,7 @@ from ufw_mock.models.source_target import Source, Target
 from ufw_mock.models.task import Task
 from ufw_mock.runtime.dag_resolver import (
     CyclicDependencyError,
+    DuplicateDatasetError,
     DuplicateTaskIdError,
     UnknownDependencyError,
     build_dependency_graph,
@@ -14,26 +15,33 @@ from ufw_mock.types import TaskType
 
 
 def make_task(task_id, depends_on=None, output_dataset=None, source_path="in", target_path="out"):
+    kwargs = {}
+    if depends_on is not None:
+        kwargs["depends_on"] = depends_on
+    if output_dataset is not None:
+        kwargs["output_dataset"] = output_dataset
     return Task(
         id=task_id,
         type=TaskType.TRANSFORM,
         source=Source(edge_node="inbound", path=source_path),
         target=Target(edge_node="core", path=target_path),
-        depends_on=depends_on or [],
-        output_dataset=output_dataset,
+        **kwargs,
     )
 
 
 def test_task_dependency_fields_default_to_empty():
-    task = make_task("t1")
-    assert task.depends_on == []
-    assert task.output_dataset is None
+    first = make_task("t1")
+    second = make_task("t2")
+    assert first.depends_on == []
+    assert first.output_dataset is None
+    first.depends_on.append("t0")
+    assert second.depends_on == []
 
 
 def test_sequential_fallback_without_dependencies():
-    tasks = [make_task("a"), make_task("b"), make_task("c")]
+    tasks = [make_task("publish"), make_task("ingest"), make_task("clean")]
     assert has_declared_dependencies(tasks) is False
-    assert [t.id for t in resolve_execution_order(tasks)] == ["a", "b", "c"]
+    assert resolve_execution_order(tasks) == tasks
 
 
 def test_topological_order_of_multi_task_dag():
@@ -53,49 +61,66 @@ def test_topological_order_of_multi_task_dag():
 
 def test_independent_branches_keep_authoring_order():
     tasks = [
-        make_task("join", depends_on=["left", "right"]),
-        make_task("left"),
-        make_task("right"),
+        make_task("join", depends_on=["zeta", "alpha"]),
+        make_task("zeta"),
+        make_task("alpha"),
     ]
     order = [t.id for t in resolve_execution_order(tasks)]
-    assert order.index("left") < order.index("join")
-    assert order.index("right") < order.index("join")
-    assert order[:2] == ["left", "right"]
+    assert order == ["zeta", "alpha", "join"]
 
 
 def test_output_dataset_creates_implicit_dependency():
     tasks = [
         make_task("downstream", source_path="curated.customers"),
-        make_task("upstream", output_dataset="curated.customers", target_path="curated.customers"),
+        make_task("upstream", output_dataset="curated.customers"),
     ]
+    assert build_dependency_graph(tasks) == {"downstream": {"upstream"}, "upstream": set()}
     assert [t.id for t in resolve_execution_order(tasks)] == ["upstream", "downstream"]
 
 
 def test_cycle_detection():
     tasks = [
-        make_task("a", depends_on=["b"]),
-        make_task("b", depends_on=["a"]),
+        make_task("clean", depends_on=["publish"]),
+        make_task("publish", depends_on=["clean"]),
     ]
     with pytest.raises(CyclicDependencyError) as exc_info:
         resolve_execution_order(tasks)
-    assert "a" in str(exc_info.value) and "b" in str(exc_info.value)
+    assert "['clean', 'publish']" in str(exc_info.value)
 
 
 def test_self_dependency_is_a_cycle():
     with pytest.raises(CyclicDependencyError):
-        resolve_execution_order([make_task("a", depends_on=["a"])])
+        resolve_execution_order([make_task("clean", depends_on=["clean"])])
 
 
 def test_unknown_dependency_error():
-    tasks = [make_task("a", depends_on=["missing"])]
+    tasks = [make_task("clean", depends_on=["missing"])]
     with pytest.raises(UnknownDependencyError) as exc_info:
         resolve_execution_order(tasks)
     assert "missing" in str(exc_info.value)
 
 
 def test_duplicate_task_ids_rejected():
-    with pytest.raises(DuplicateTaskIdError):
-        resolve_execution_order([make_task("a"), make_task("a")])
+    with pytest.raises(DuplicateTaskIdError) as exc_info:
+        resolve_execution_order([make_task("clean"), make_task("clean")])
+    assert "clean" in str(exc_info.value)
+
+
+def test_dataset_reference_via_source_properties():
+    downstream = make_task("downstream")
+    downstream.source.properties["dataset"] = "curated.customers"
+    tasks = [downstream, make_task("upstream", output_dataset="curated.customers")]
+    assert [t.id for t in resolve_execution_order(tasks)] == ["upstream", "downstream"]
+
+
+def test_duplicate_output_dataset_rejected():
+    tasks = [
+        make_task("first", output_dataset="curated.customers"),
+        make_task("second", output_dataset="curated.customers"),
+    ]
+    with pytest.raises(DuplicateDatasetError) as exc_info:
+        resolve_execution_order(tasks)
+    assert "curated.customers" in str(exc_info.value)
 
 
 def test_build_dependency_graph_edges():
