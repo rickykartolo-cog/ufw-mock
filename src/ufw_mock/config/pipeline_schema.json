@@ -236,6 +236,27 @@
           "title": "Transformations",
           "type": "array"
         },
+        "depends_on": {
+          "description": "Ids of upstream tasks that must run before this task.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "output_dataset": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name of the dataset this task produces, referenced by downstream tasks.",
+          "title": "Output Dataset"
+        },
         "properties": {
           "type": "object",
           "additionalProperties": true,

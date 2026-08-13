@@ -2,6 +2,7 @@ import json
 
 from ufw_mock.models.pipeline import Pipeline
 from ufw_mock.models.platform import Platform
+from ufw_mock.runtime.dag_resolver import resolve_execution_order
 from ufw_mock.runtime.edge_node_registry import EdgeNodeRegistry
 from ufw_mock.runtime.platform import PlatformAdapter, get_platform
 from ufw_mock.runtime.task_executor import TaskExecutor
@@ -18,7 +19,7 @@ class PipelineRunner:
 
     def run(self) -> dict:
         summary = {"pipeline": self.pipeline.name, "tasks": []}
-        for task in self.pipeline.tasks:
+        for task in resolve_execution_order(self.pipeline.tasks):
             self.task_executor.execute(self.pipeline, task)
             summary["tasks"].append({"id": task.id, "status": "success"})
         summary["status"] = "success"

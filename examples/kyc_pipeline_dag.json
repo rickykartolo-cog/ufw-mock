@@ -1,0 +1,187 @@
+{
+  "name": "kyc-customer-onboarding-dag",
+  "version": "1.0.0",
+  "owner": "central-data-platform",
+  "schedule": "0 6 * * *",
+  "properties": {
+    "environment": "dev",
+    "line_of_business": "retail"
+  },
+  "platform": {
+    "name": "local_pyspark",
+    "config": {
+      "spark.sql.shuffle.partitions": "2"
+    }
+  },
+  "edge_nodes": [
+    {
+      "name": "inbound-crm",
+      "direction": "INBOUND",
+      "protocol": "file",
+      "owner": "crm-team",
+      "properties": {
+        "base_path": ""
+      }
+    },
+    {
+      "name": "core-raw-zone",
+      "direction": "INBOUND",
+      "protocol": "file",
+      "owner": "central-data-platform",
+      "properties": {
+        "base_path": ""
+      }
+    },
+    {
+      "name": "core-curated-zone",
+      "direction": "INBOUND",
+      "protocol": "file",
+      "owner": "central-data-platform",
+      "properties": {
+        "base_path": ""
+      }
+    },
+    {
+      "name": "outbound-marketing",
+      "direction": "OUTBOUND",
+      "protocol": "file",
+      "owner": "marketing-team",
+      "properties": {
+        "base_path": ""
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "id": "publish-customer-outbound",
+      "type": "PUBLISH",
+      "source": {
+        "edge_node": "core-curated-zone",
+        "path": "data/core/curated/customers",
+        "format": "parquet"
+      },
+      "target": {
+        "edge_node": "outbound-marketing",
+        "path": "data/outbound/marketing/customers",
+        "format": "parquet",
+        "mode": "overwrite"
+      },
+      "transformations": [
+        {
+          "name": "select-publishable-cols",
+          "type": "select",
+          "input_cols": [
+            "customer_id",
+            "email",
+            "country_standardised",
+            "risk_segment"
+          ]
+        }
+      ],
+      "depends_on": [
+        "validate-customer-quality"
+      ],
+      "output_dataset": "outbound.customers"
+    },
+    {
+      "id": "validate-customer-quality",
+      "type": "VALIDATE",
+      "source": {
+        "edge_node": "core-curated-zone",
+        "path": "data/core/curated/customers",
+        "format": "parquet"
+      },
+      "target": {
+        "edge_node": "core-curated-zone",
+        "path": "data/core/curated/customers",
+        "format": "parquet",
+        "mode": "overwrite"
+      },
+      "transformations": [
+        {
+          "name": "check-unique-customer-id",
+          "type": "unique",
+          "input_cols": [
+            "customer_id"
+          ]
+        },
+        {
+          "name": "check-email-format",
+          "type": "regex",
+          "input_cols": [
+            "email"
+          ],
+          "params": {
+            "pattern": "^[^@]+@[^@]+$"
+          }
+        }
+      ],
+      "depends_on": [
+        "transform-customer-clean"
+      ]
+    },
+    {
+      "id": "transform-customer-clean",
+      "type": "TRANSFORM",
+      "source": {
+        "edge_node": "core-raw-zone",
+        "path": "data/core/raw/customers",
+        "format": "parquet"
+      },
+      "target": {
+        "edge_node": "core-curated-zone",
+        "path": "data/core/curated/customers",
+        "format": "parquet",
+        "mode": "overwrite"
+      },
+      "transformations": [
+        {
+          "name": "drop-null-emails",
+          "type": "filter",
+          "params": {
+            "condition": "email IS NOT NULL"
+          }
+        },
+        {
+          "name": "standardise-country",
+          "type": "uppercase",
+          "input_cols": [
+            "country"
+          ],
+          "output_col": "country_standardised"
+        },
+        {
+          "name": "segment-customer",
+          "type": "custom.segment_by_risk",
+          "input_cols": [
+            "income",
+            "country_standardised"
+          ],
+          "output_col": "risk_segment"
+        }
+      ],
+      "depends_on": [
+        "ingest-customer-raw"
+      ],
+      "output_dataset": "curated.customers"
+    },
+    {
+      "id": "ingest-customer-raw",
+      "type": "INGEST",
+      "source": {
+        "edge_node": "inbound-crm",
+        "path": "data/inbound/crm/customers",
+        "format": "parquet"
+      },
+      "target": {
+        "edge_node": "core-raw-zone",
+        "path": "data/core/raw/customers",
+        "format": "parquet",
+        "mode": "overwrite"
+      },
+      "transformations": [],
+      "depends_on": [],
+      "output_dataset": "raw.customers"
+    }
+  ]
+}
