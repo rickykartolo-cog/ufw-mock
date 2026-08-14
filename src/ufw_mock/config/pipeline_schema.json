@@ -52,6 +52,36 @@
       "title": "EdgeProtocol",
       "type": "string"
     },
+    "Platform": {
+      "description": "Runtime environment configuration.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/PlatformType",
+          "default": "local_pyspark"
+        },
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        },
+        "sdp": {
+          "$ref": "#/$defs/SdpOptions",
+          "description": "SDP-specific options."
+        }
+      },
+      "title": "Platform",
+      "type": "object"
+    },
+    "PlatformType": {
+      "enum": [
+        "local_pyspark",
+        "databricks",
+        "cloudera",
+        "sdp"
+      ],
+      "title": "PlatformType",
+      "type": "string"
+    },
     "SchemaRef": {
       "description": "Reference to a schema definition, either inline or external.",
       "properties": {
@@ -108,6 +138,73 @@
         }
       },
       "title": "SchemaRef",
+      "type": "object"
+    },
+    "SdpMaterialization": {
+      "enum": [
+        "streaming_table",
+        "materialized_view",
+        "table",
+        "view"
+      ],
+      "title": "SdpMaterialization",
+      "type": "string"
+    },
+    "SdpOptions": {
+      "description": "Spark Declarative Pipelines (SDP) specific options.",
+      "properties": {
+        "catalog": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Target catalog for emitted datasets.",
+          "title": "Catalog"
+        },
+        "schema": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Target schema/database for emitted datasets.",
+          "title": "Schema Name"
+        },
+        "dataset_names": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Task id -> dataset name overrides.",
+          "title": "Dataset Names",
+          "type": "object"
+        },
+        "ingest_materialization": {
+          "$ref": "#/$defs/SdpMaterialization",
+          "default": "streaming_table",
+          "description": "Materialization used for INGEST tasks."
+        },
+        "derived_materialization": {
+          "$ref": "#/$defs/SdpMaterialization",
+          "default": "materialized_view",
+          "description": "Materialization used for TRANSFORM and PUBLISH tasks."
+        },
+        "module_name": {
+          "default": "ufw_sdp_pipeline",
+          "description": "Name of the emitted module.",
+          "title": "Module Name",
+          "type": "string"
+        }
+      },
+      "title": "SdpOptions",
       "type": "object"
     },
     "Source": {
@@ -239,7 +336,8 @@
         "properties": {
           "type": "object",
           "additionalProperties": true,
-          "title": "Properties"
+          "title": "Properties",
+          "description": "Task-level overrides, e.g. {\"sdp\": {\"materialization\": \"table\", \"catalog\": \"main\", \"schema\": \"curated\"}}."
         }
       },
       "required": [
@@ -328,6 +426,10 @@
   },
   "description": "A declarative, JSON-driven workflow of tasks.",
   "properties": {
+    "platform": {
+      "$ref": "#/$defs/Platform",
+      "description": "Runtime platform configuration."
+    },
     "name": {
       "description": "Unique pipeline name.",
       "title": "Name",

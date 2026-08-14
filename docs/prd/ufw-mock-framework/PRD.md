@@ -103,8 +103,9 @@ class Transformation:
     output_col: str | None
 
 class Platform:
-    name: str  # local_pyspark | databricks
+    name: str  # local_pyspark | databricks | sdp
     config: dict
+    sdp: SdpOptions  # catalog, schema, dataset name overrides, materializations
     # resolves SparkSession / catalog / storage handlers
 ```
 
@@ -129,6 +130,7 @@ ufw_mock/
 │       │   ├── __init__.py
 │       │   ├── pipeline_runner.py
 │       │   ├── task_executor.py
+│       │   ├── sdp_compiler.py
 │       │   └── transform_registry.py
 │       ├── formats/
 │       │   ├── __init__.py
@@ -147,14 +149,16 @@ ufw_mock/
 │       └── config/
 │           └── pipeline_schema.json
 ├── examples/
-│   └── kyc_pipeline.json
+│   ├── kyc_pipeline.json
+│   └── kyc_pipeline_sdp.json
 └── tests/
     ├── unit/
     │   ├── test_models.py
     │   ├── test_validation.py
     │   └── test_transform_registry.py
     └── integration/
-        └── test_pipeline_runner.py
+        ├── test_pipeline_runner.py
+        └── test_sdp_compiler.py
 ```
 
 ### 2.4 JSON Config Example (KYC Pipeline)
@@ -291,7 +295,7 @@ ufw_mock/
 
 | Component | Responsibility | Default Implementations |
 |-----------|----------------|-------------------------|
-| `Platform` | Provides `SparkSession` and runtime context | `LocalPySparkPlatform`, `DatabricksPlatform` (stub) |
+| `Platform` | Provides `SparkSession` and runtime context | `LocalPySparkPlatform`, `DatabricksPlatform` (stub), `SparkDeclarativePipelinesPlatform` (stub) |
 | `Format` | Read/write data in a given format | `ParquetFormat`, `IcebergFormat`, `DeltaFormat`, `JsonFormat` |
 | `Edge` | Resolve source/target location | `FileEdge`, `KafkaEdge` (stub) |
 | `Transform` | Apply a transformation to a DataFrame | `select`, `filter`, `cast`, `uppercase`, `rename`, `custom.*` |
@@ -325,6 +329,26 @@ ufw_mock/
 2. The central platform registers a Python function under the key `custom.segment_by_risk` in the transform registry.
 3. The pipeline JSON references `custom.segment_by_risk`.
 4. At runtime, the registry resolves and executes the custom function against the DataFrame.
+
+### 3.3b Happy Path: Compiling a Pipeline to Spark Declarative Pipelines
+
+1. Engineer sets `platform.name` to `sdp` (or passes `--platform sdp`) and optionally an
+   `platform.sdp` block with target catalog/schema, dataset name overrides, and
+   materialization choices.
+2. `PipelineRunner` takes the SDP branch: instead of the sequential `TaskExecutor` loop, it
+   calls `compile_pipeline()` in `runtime/sdp_compiler.py`.
+3. The compiler builds a dependency DAG by matching each task's `target` (edge node + path)
+   to downstream tasks' `source`, so datasets are wired by data dependency rather than by
+   task list order.
+4. Task types map onto SDP constructs: `INGEST` becomes an Auto Loader-style streaming table,
+   `TRANSFORM`/`PUBLISH` become materialized views or tables, and `VALIDATE` transformations
+   become SDP expectations (`@sdp.expect_all`, `@sdp.expect_all_or_drop`,
+   `@sdp.expect_all_or_fail`) attached to the dataset they validate.
+5. The output is a contract artifact: a dependency-ordered `SdpPipelineGraph` plus a generated
+   Python module whose dataset bodies reuse the existing `TransformRegistry`. The generated
+   module guards its `pipelines`/`dlt` import and fails with a clear error when the SDP engine
+   is unavailable, so compilation works locally while registration only runs inside a
+   Databricks/SDP pipeline.
 
 ### 3.4 Edge Case: Platform-Specific Deployment
 
@@ -381,6 +405,7 @@ The following are explicitly not covered by this PRD:
 6. **Auto-scaling / cluster management** — Platform adapters do not manage cluster lifecycle.
 7. **Migration of existing UFW pipelines** — The PRD does not map every legacy UFW construct 1:1; it provides the target abstraction and a sample.
 8. **Performance benchmarking** — No SLAs, throughput targets, or optimization guidelines.
+9. **Live SDP execution** — The SDP platform compiles and emits dataset definitions; running them requires a real Databricks/SDP pipeline context.
 
 ## 7. Prototype Implementation Plan
 
@@ -389,15 +414,16 @@ The working prototype will be built as a Python package in `/Users/ricky.k/works
 1. **Project scaffolding** — `pyproject.toml`, package structure, pytest configuration.
 2. **Domain models** — Pydantic or dataclasses for `Pipeline`, `Task`, `Source`, `Target`, `EdgeNode`, `Transformation`, `Platform`.
 3. **JSON Schema** — `pipeline_schema.json` and validation function.
-4. **Platform adapter** — `LocalPySparkPlatform` with `SparkSession` management; `DatabricksPlatform` as a stub/contract.
+4. **Platform adapter** — `LocalPySparkPlatform` with `SparkSession` management; `DatabricksPlatform` and `SparkDeclarativePipelinesPlatform` as stubs/contracts.
 5. **Format adapters** — `ParquetFormat`, `IcebergFormat`, `DeltaFormat`, with read/write signatures.
 6. **Edge adapters** — `FileEdge` concrete; `KafkaEdge`/`RestEdge` as stubs.
 7. **Transform registry** — Built-in transforms + custom function registration.
 8. **Task executor** — Sequential runner for `INGEST`, `TRANSFORM`, `VALIDATE`, `PUBLISH`.
-9. **CLI entry point** — `ufw-run --config <path> --platform <name>`.
-10. **Tests** — Unit tests for models, validation, registry; integration test for local pipeline runner.
-11. **Example** — `examples/kyc_pipeline.json`.
-12. **Reference architecture doc** — Migration decision records and Databricks/Iceberg mapping diagrams.
+9. **SDP compiler** — `runtime/sdp_compiler.py` compiles a pipeline into SDP dataset definitions (dependency DAG, expectations, emitted Python module).
+10. **CLI entry point** — `ufw-run --config <path> --platform <name>`.
+11. **Tests** — Unit tests for models, validation, registry; integration tests for the local pipeline runner and the SDP compiler.
+12. **Example** — `examples/kyc_pipeline.json`, `examples/kyc_pipeline_sdp.json`.
+13. **Reference architecture doc** — Migration decision records and Databricks/Iceberg mapping diagrams.
 
 ## 8. Reference Architecture Notes
 

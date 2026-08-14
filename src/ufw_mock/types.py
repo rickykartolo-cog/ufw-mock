@@ -40,3 +40,21 @@ class PlatformType(str, Enum):
     LOCAL_PYSPARK = "local_pyspark"
     DATABRICKS = "databricks"
     CLOUDERA = "cloudera"
+    SPARK_DECLARATIVE_PIPELINES = "sdp"
+
+
+class SdpMaterialization(str, Enum):
+    """How an SDP dataset is materialised."""
+
+    STREAMING_TABLE = "streaming_table"
+    MATERIALIZED_VIEW = "materialized_view"
+    TABLE = "table"
+    VIEW = "view"
+
+
+class SdpExpectationAction(str, Enum):
+    """Action taken when an SDP expectation is violated."""
+
+    WARN = "warn"
+    DROP = "drop"
+    FAIL = "fail"
