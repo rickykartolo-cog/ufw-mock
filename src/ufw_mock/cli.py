@@ -15,7 +15,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--platform",
         default="local_pyspark",
-        help="Runtime platform: local_pyspark or databricks.",
+        help=(
+            "Runtime platform: local_pyspark, databricks, or sdp "
+            "(Spark Declarative Pipelines; compiles the pipeline into SDP dataset "
+            "definitions instead of running tasks sequentially)."
+        ),
     )
     parser.add_argument("--validate-only", action="store_true", help="Validate config without running.")
     args = parser.parse_args(argv)
@@ -36,7 +40,11 @@ def main(argv: list[str] | None = None) -> int:
     pipeline = Pipeline.model_validate(raw_config)
     raw_platform = raw_config.get("platform", {})
     platform_name = raw_platform.get("name", args.platform)
-    platform_config = Platform(name=platform_name, config=raw_platform.get("config", {}))
+    platform_config = Platform(
+        name=platform_name,
+        config=raw_platform.get("config", {}),
+        sdp=raw_platform.get("sdp", {}),
+    )
     platform = get_platform(platform_config)
 
     with PipelineRunner(pipeline, platform) as runner:
